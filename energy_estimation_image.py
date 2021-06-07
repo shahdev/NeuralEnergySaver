@@ -321,8 +321,10 @@ def main():
     parser.add_argument('-model_path', '--model_path', type=str, default='ckpt.pth', help='path to pretrained model')
     parser.add_argument('-program_path', '--program_path', type=str, default='W_conv_input.pt', help='path to trained program weights')
     parser.add_argument('-image_path', '--image_path', type=str, default='image.npy', help='path to image')
-    parser.add_argument('-reprogram', '--reprogram', type=bool, default=False, help='if reprogrammed image is used')
+    parser.add_argument('--reprogram', action='store_true', help='if reprogrammed image is used')
     args = parser.parse_args()
+    global reprogram
+    reprogram = args.reprogram 
 
     AR = Adversarial_Reprogramming(args)
     AR.forward(args.image_path)
