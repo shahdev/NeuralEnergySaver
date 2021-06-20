@@ -1,3 +1,4 @@
+from __future__ import division
 import torch
 import torchvision
 import torch.nn as nn
@@ -10,7 +11,9 @@ import time
 from functools import reduce
 from operator import mul
 from vgg import VGG
-
+from resnet import *
+from mobilenetv2 import MobileNetV2
+from alexnet import AlexNet
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 layer_counter = 0
 layer_activations = {}
@@ -30,12 +33,8 @@ class EnergyEstimation():
         self.xvf32ger_n = 4 # 4 instructions to create a 4x4 outer product of two 4-element vectors
         self.bblock_r = 8
         self.bblock_c = 16
-        self.xvf32ger_energy_density_scale = [0.203665988, 0.476610249, 0.601375176, 0.700340856, 0.801657264, 0.865362012, 0.910437236, 0.963622473, 0.990185708, 0.998883404, 1]
+        self.xvf32ger_energy_density_scale = [0.203665988, 0.476610249, 0.601375176, 0.700340856, 0.801657264, 0.865362012, 0.910437236, 0.963622473, 0.990185708, 0.998883404, 1] 
 
-
- 
-
-    
     def baseline_energy_dataswitching(self, weight_size, input_size, output_size, density):
         """
         This estimates energy for a given layer, if there is no explicit support for sparsity. 0-valued computations are not eliminated. 
@@ -52,6 +51,7 @@ class EnergyEstimation():
         M = output_size[0]
         K = input_size[0] # or weight_size[1]
         N = output_size[1]
+        import pdb; pdb.set_trace()
         block8x16_xvf32ger_n = bblock8x16_xvf32ger_n * K/4
         block8x16_energy = K/4 * bblock8x16_energy
         
@@ -120,7 +120,7 @@ class EnergyEstimation():
                         for m in range(0,np.ceil(mshape[0]/4).astype(int)):
                             xvf32ger_instructions += 1
 
-                            density = 1 - (torch.sum(mma_act_row.view(-1)[:4:] == 0))/4
+                            density = 1 - (torch.sum(mma_act_row.view(-1)[:4:] == 0))/4.0
                             if (density == 0):
                                 xvf32ger_instructions_eliminated += 1
                             else:
@@ -142,15 +142,15 @@ class EnergyEstimation():
         K = input_size[0]
         N = input_size[1]
         print(M,K,N)
-        xvf32ger_instructions_eliminated = xvf32ger_instructions_eliminated * (M/4)                 
+        xvf32ger_instructions_eliminated = xvf32ger_instructions_eliminated * (M/4.0)                 
         #print('instructions eliminated', xvf32ger_instructions_eliminated)
-        xvf32ger_instructions = xvf32ger_instructions * (M/4)
+        xvf32ger_instructions = xvf32ger_instructions * (M/4.0)
         print('percentage instructions eliminated %.4f'%(xvf32ger_instructions_eliminated/xvf32ger_instructions))
-        xvf32ger_energy_total = xvf32ger_energy_total * (M/4)
+        xvf32ger_energy_total = xvf32ger_energy_total * (M/4.0)
         print('Total energy baseline %.4f'%(xvf32ger_energy_total))
-        xvf32ger_energy_skip_inst = xvf32ger_energy_skip_inst * (M/4)
+        xvf32ger_energy_skip_inst = xvf32ger_energy_skip_inst * (M/4.0)
         print('Total energy with skipped instructions %.4f'%(xvf32ger_energy_skip_inst))
-        xvf32ger_energy_skip_comp = xvf32ger_energy_skip_comp * (M/4)
+        xvf32ger_energy_skip_comp = xvf32ger_energy_skip_comp * (M/4.0)
         print('Total energy with skipped computations per instruction %.4f'%(xvf32ger_energy_skip_comp))
         #print('Energy reduction in percentage %.4f'%((xvf32ger_energy_total - xvf32ger_energy_sparse)/xvf32ger_energy_total*100))
         ## verify code to compute # instructions
@@ -207,7 +207,6 @@ def mma_instructions_estimate(conv2d_i, conv2d_w, conv2d_o):
 
 def activations(self, input, output):
     global layer_counter, total_values_dict, zero_values_dict
-
     if 'Conv2d' in self.__class__.__name__:
         i_shape = input[0].shape
         total_values = reduce(mul, i_shape[1:], 1)
@@ -220,8 +219,9 @@ def activations(self, input, output):
     layer_counter += 1
 
 class Program(nn.Module):
-    def __init__(self, model_path, program_path):
+    def __init__(self, model_path, program_path, model_architecture='vgg16'):
         super(Program, self).__init__()
+        self.model_architecture = model_architecture
         self.init_net(model_path)
         self.W = Parameter(torch.zeros(input_shape, device=device), requires_grad=False)
         if program_path is not None:
@@ -233,7 +233,16 @@ class Program(nn.Module):
 
     # load pre-trained model from checkpoint
     def init_net(self, model_path):
-        self.net = VGG('VGG16')
+        if self.model_architecture == 'vgg16':
+            self.net = VGG('VGG16')
+        elif self.model_architecture == 'mobilenet':
+            self.net = MobileNetV2()
+        elif self.model_architecture == 'alexnet':
+            self.net = AlexNet()
+        elif self.model_architecture == 'resnet18':
+            self.net = ResNet18()
+        elif self.model_architecture == 'resnet34':
+            self.net = ResNet34()
         print(self.net)
         self.net = self.net.to(device)
         # load pre-trained weights
@@ -277,14 +286,14 @@ class Program(nn.Module):
             print('density in layer %d : %.6f'%(q,1-zero_values_dict[q]/total_values_dict[q]))
         total_values_sum = sum(total_values_dict.values())
         zero_values_sum = sum(zero_values_dict.values())
-        density = 1 - zero_values_sum / total_values_sum
+        density = 1 - zero_values_sum*1.0 / total_values_sum
 
         return self.imagenet_label2_mnist_label(Y_adv), (layer_activations, density)
 
 class Adversarial_Reprogramming(object):
     def __init__(self, args):
         self.gpu = device == 'cuda'
-        self.Program = Program(args.model_path, args.program_path)
+        self.Program = Program(args.model_path, args.program_path, model_architecture=args.model_architecture)
     # def init_dataset(self):
     #     test_set = torchvision.datasets.CIFAR10('.', train=False, download=True, transform=transforms.ToTensor())
     #     kwargs = {'num_workers': 0, 'pin_memory': True, 'drop_last': True}
@@ -322,6 +331,7 @@ def main():
     parser.add_argument('-program_path', '--program_path', type=str, default='W_conv_input.pt', help='path to trained program weights')
     parser.add_argument('-image_path', '--image_path', type=str, default='image.npy', help='path to image')
     parser.add_argument('--reprogram', action='store_true', help='if reprogrammed image is used')
+    parser.add_argument('--model_architecture', type=str, choices=['resnet18', 'vgg16', 'alexnet', 'mobilenet', 'resnet34', 'resnet50', 'resnet101'])
     args = parser.parse_args()
     global reprogram
     reprogram = args.reprogram 

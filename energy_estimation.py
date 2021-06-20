@@ -1,3 +1,4 @@
+from __future__ import division
 import torch
 import torchvision
 import torch.nn as nn
@@ -10,7 +11,9 @@ import time
 from functools import reduce
 from operator import mul
 from vgg import VGG
-
+from resnet import *
+from mobilenetv2 import MobileNetV2
+from alexnet import AlexNet
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 layer_counter = 0
 batch_size = 10
@@ -119,7 +122,7 @@ class EnergyEstimation():
                         for m in range(0,np.ceil(mshape[0]/4).astype(int)):
                             xvf32ger_instructions += 1
 
-                            density = 1 - (torch.sum(mma_act_row.view(-1)[:4:] == 0))/4
+                            density = 1 - (torch.sum(mma_act_row.view(-1)[:4:] == 0))/4.0
                             if (density == 0):
                                 xvf32ger_instructions_eliminated += 1
                             else:
@@ -192,7 +195,7 @@ def mma_instructions_estimate(conv2d_i, conv2d_w, conv2d_o):
 
         # per-layer sparsity, where the computations that can be skipped are randomly distributed, and the % density of activations is the same for each block
         #density = torch.count_nonzero(conv2d_input)/(i_shape[0]*i_shape[1]*i_shape[2]*i_shape[3])
-        density = 1 - (torch.sum(conv2d_input==0)/(i_shape[0]*i_shape[1]*i_shape[2]*i_shape[3]))
+        density = 1 - (torch.sum(conv2d_input==0)*1.0/(i_shape[0]*i_shape[1]*i_shape[2]*i_shape[3]))
         print('layer density %.4f'%(density))
         #ee.uniform_sparsity_energy(mma_weight_shape, mma_input_shape, mma_output_shape, density.cpu().numpy())
 
@@ -219,8 +222,9 @@ def activations(self, input, output):
     layer_counter += 1
 
 class Program(nn.Module):
-    def __init__(self, model_path, program_path):
+    def __init__(self, model_path, program_path, model_architecture='vgg16'):
         super(Program, self).__init__()
+        self.model_architecture = model_architecture
         self.init_net(model_path)
         self.W = Parameter(torch.zeros(input_shape, device=device), requires_grad=False)
         if program_path is not None:
@@ -232,7 +236,16 @@ class Program(nn.Module):
 
     # load pre-trained model from checkpoint
     def init_net(self, model_path):
-        self.net = VGG('VGG16')
+        if self.model_architecture == 'vgg16':
+            self.net = VGG('VGG16')
+        elif self.model_architecture == 'mobilenet':
+            self.net = MobileNetV2()
+        elif self.model_architecture == 'alexnet':
+            self.net = AlexNet()
+        elif self.model_architecture == 'resnet18':
+            self.net = ResNet18()
+        elif self.model_architecture == 'resnet34':
+            self.net = ResNet34()
         print(self.net)
         self.net = self.net.to(device)
         # load pre-trained weights
@@ -279,7 +292,7 @@ class Adversarial_Reprogramming(object):
     def __init__(self, args):
         self.gpu = device == 'cuda'
         self.init_dataset(args.dataset_path)
-        self.Program = Program(args.model_path, args.program_path)
+        self.Program = Program(args.model_path, args.program_path, model_architecture=args.model_architecture)
 
     def init_dataset(self, dataset_path):
         test_set = torchvision.datasets.CIFAR10(dataset_path, train=False, download=True, transform=transforms.ToTensor())
@@ -320,6 +333,7 @@ def main():
     parser.add_argument('-program_path', '--program_path', type=str, default='W_conv_input.pt', help='path to trained program weights')
     parser.add_argument('-dataset_path', '--dataset_path', type=str, default='~/ZStressmark/data', help='path to dataset')
     parser.add_argument('--reprogram', action='store_true', help='if reprogrammed image is used')
+    parser.add_argument('--model_architecture', type=str, choices=['resnet18', 'vgg16', 'alexnet', 'mobilenet', 'resnet34', 'resnet50', 'resnet101'])
     args = parser.parse_args()
     global reprogram
     reprogram = args.reprogram
