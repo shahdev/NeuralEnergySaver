@@ -7,7 +7,6 @@ import torch
 import torchvision
 import torch.nn as nn
 from torch.autograd import Variable
-from torch.nn.parameter import Parameter
 import torch.nn.functional as F
 from torchvision import datasets, transforms
 import numpy as np
@@ -20,15 +19,15 @@ from vgg import VGG
 from mobilenetv2 import MobileNetV2
 from alexnet import AlexNet
 from resnet import ResNet18
-from vgg9 import VGG9
-from mnist_model import Net as MNIST_M
+#from vgg9 import VGG9
+#from mnist_model import Net as MNIST_M
 import random
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 from codecarbon import EmissionsTracker
 from codecarbon import OfflineEmissionsTracker
 import torchvision.models as models
 import time
-import resnet56
+#import resnet56
 layer_loss = {}
 layer_counter = 0
 total_values_dict = {}
@@ -58,7 +57,7 @@ class Program(nn.Module):
 		self.num_classes = 10
 		self.init_net(checkpoint_path)
 		self.init_mask()
-		self.W = Parameter((torch.randn(self.M.shape) * 2 - 1) * 0.0001, requires_grad=True)
+		self.W = nn.Parameter((torch.randn(self.M.shape).to(device) * 2 - 1) * 0.0001, requires_grad=True)
 		# self.W = Parameter(torch.zeros(self.M.shape), requires_grad=True)
 		# self.W.data = torch.load('train_log_resnet18/lb_2/W_030.pt', map_location=torch.device(device))['W']
 		#self.W = Parameter(torch.load('train_log_resnet18/lb_5e-1/W_030.pt', map_location=torch.device(device)), requires_grad=True)
@@ -122,8 +121,8 @@ class Program(nn.Module):
 			mean = mean[..., np.newaxis, np.newaxis]
 			std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 			std = std[..., np.newaxis, np.newaxis]
-			self.mean = Parameter(torch.from_numpy(mean), requires_grad=False)
-			self.std = Parameter(torch.from_numpy(std), requires_grad=False)
+			self.mean = nn.Parameter(torch.from_numpy(mean).to(device), requires_grad=False)
+			self.std = nn.Parameter(torch.from_numpy(std).to(device), requires_grad=False)
 			self.net.eval()
 			for param in self.net.parameters():
 				param.requires_grad = False
@@ -139,9 +138,10 @@ class Program(nn.Module):
 			mean = mean[..., np.newaxis, np.newaxis]
 			std = np.array([0.2023, 0.1994, 0.2010], dtype=np.float32)
 			std = std[..., np.newaxis, np.newaxis]
-			self.mean = Parameter(torch.from_numpy(mean), requires_grad=False)
-			self.std = Parameter(torch.from_numpy(std), requires_grad=False)
-
+			self.mean = nn.Parameter(torch.from_numpy(mean).to(device), requires_grad=False)
+			self.std = nn.Parameter(torch.from_numpy(std).to(device), requires_grad=False)
+			self.mean = self.mean.to(device)
+			self.std = self.std.to(device)
 			self.net.eval()
 			for param in self.net.parameters():
 				param.requires_grad = False
@@ -151,7 +151,8 @@ class Program(nn.Module):
 		M = torch.ones(self.cfg.channels, self.cfg.h1, self.cfg.w1)
 		# c_w, c_h = int(np.ceil(self.cfg.w1/2.)), int(np.ceil(self.cfg.h1/2.))
 		# M[:,c_h-self.cfg.h2//2:c_h+self.cfg.h2//2, c_w-self.cfg.w2//2:c_w+self.cfg.w2//2] = 0
-		self.M = Parameter(M, requires_grad=False)
+		self.M = nn.Parameter(M, requires_grad=False)
+		self.M.to(device)
 
 	def imagenet_label2_mnist_label(self, imagenet_label):
 		return imagenet_label[:, :self.num_classes]/self.temperature
@@ -175,6 +176,7 @@ class Program(nn.Module):
 		layer_loss = {}
 		total_values_dict = {}
 		zero_values_dict = {}
+		X_adv = X_adv.to(device)
 		Y_adv = self.net(X_adv)
 		#Y_adv = F.softmax(Y_adv, 1)
 		total_values_sum = sum(total_values_dict.values())
@@ -343,14 +345,16 @@ class Adversarial_Reprogramming(object):
 
 	def validate(self):
 		#tracker = EmissionsTracker()
-		tracker = OfflineEmissionsTracker(country_iso_code="USA")
-		tracker.start()
+		# tracker = OfflineEmissionsTracker(country_iso_code="USA")
+		# tracker.start()
 		start_time = time.time()
 		acc = 0.0
 		average_density = 0.0
 		average_layer_wise_density = []
 		for k, (image, label) in enumerate(self.train_loader):
 			image = self.tensor2var(image)
+			image = image.to(device)
+			label = label.to(device)
 			out, (_, density, layer_wise_density) = self.Program(image)
 			pred = out.data.cpu().numpy().argmax(1)
 			average_density += sum(density.cpu().numpy()) / float(len(label) * len(self.train_loader))
@@ -358,7 +362,7 @@ class Adversarial_Reprogramming(object):
 				average_layer_wise_density = [0.0 for x in layer_wise_density]
 			for layer_num in range(len(average_layer_wise_density)):
 				average_layer_wise_density[layer_num] += torch.sum(layer_wise_density[layer_num]).cpu().numpy()/float(len(label) * len(self.train_loader))
-			acc += sum(label.numpy() == pred) / float(len(label) * len(self.train_loader))
+			acc += sum(label.cpu().numpy() == pred) / float(len(label) * len(self.train_loader))
 		print('train accuracy: %.6f' % acc, flush=True)
 		print('train average density: %6f' % average_density, flush=True)
 		print('Total activation size: %d' % self.Program.total_values_sum)
@@ -368,6 +372,8 @@ class Adversarial_Reprogramming(object):
 		average_layer_wise_density = []
 		for k, (image, label) in enumerate(self.test_loader):
 			image = self.tensor2var(image)
+			image = image.to(device)
+			label = label.to(device)			
 			out, (_, density, layer_wise_density) = self.Program(image)
 			pred = out.data.cpu().numpy().argmax(1)
 			average_density += sum(density.cpu().numpy()) / float(len(label) * len(self.test_loader))
@@ -375,12 +381,12 @@ class Adversarial_Reprogramming(object):
 				average_layer_wise_density = [0.0 for x in layer_wise_density]
 			for layer_num in range(len(average_layer_wise_density)):
 				average_layer_wise_density[layer_num] += torch.sum(layer_wise_density[layer_num]).cpu().numpy()/float(len(label) * len(self.test_loader))
-			acc += sum(label.numpy() == pred) / float(len(label) * len(self.test_loader))
+			acc += sum(label.cpu().numpy() == pred) / float(len(label) * len(self.test_loader))
 		print('test accuracy: %.6f' % acc)
 		print('test average density: %6f' % average_density, flush=True)
 		print('test layer wise density', average_layer_wise_density)
-		emissions: float = tracker.stop()
-		print(f"Emissions: {emissions} kg")
+		# emissions: float = tracker.stop()
+		# print(f"Emissions: {emissions} kg")
 		end_time = time.time()
 		print("INFERENCE TIME: %s"%(end_time-start_time))
 
@@ -391,6 +397,8 @@ class Adversarial_Reprogramming(object):
 			self.lr_scheduler.step()
 			for j, (image, label) in tqdm(enumerate(self.train_loader)):
 				image = self.tensor2var(image)
+				image = image.to(device)
+				label = label.to(device)
 				self.out, (l_sparsity, density, _) = self.Program(image)
 				self.loss = self.compute_loss(self.out, label) + self.lb * l_sparsity
 				self.optimizer.zero_grad()
